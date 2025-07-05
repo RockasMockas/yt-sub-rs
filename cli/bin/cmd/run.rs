@@ -55,6 +55,9 @@ impl RunArgs {
             return Ok(());
         }
 
+        // Sort videos by publication date (newest first)
+        new_videos.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+
         for notifier in &settings.notifiers {
             let notifications = new_videos
                 .iter()
