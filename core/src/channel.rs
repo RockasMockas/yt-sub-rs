@@ -91,7 +91,7 @@ https://github.com/pawurb/yt-sub-rs#manually-finding-an-rss-channel_id"
 
     pub async fn get_fresh_videos(&self, last_run_at: DateTime<Utc>) -> Result<Vec<Video>> {
         let rss = self.get_rss_data().await?;
-        let videos = Video::parse_rss(rss)?;
+        let videos = Video::parse_rss(rss, Some(self.handle.clone()))?;
 
         let videos: Vec<Video> = videos
             .into_iter()
