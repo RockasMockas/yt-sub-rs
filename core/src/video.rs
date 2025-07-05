@@ -52,12 +52,20 @@ impl Video {
 
         match notifier {
             Notifier::Log() => {
-                let mut parts = vec![format!("- [{}]({})", self.title, self.link)];
+                let mut parts = vec![];
 
+                // Start with dash
+                parts.push("-".to_string());
+
+                // Add channel handle if available
                 if !channel_handle.is_empty() {
-                    parts.push(format!("- {}", channel_handle));
+                    parts.push(channel_handle.to_string());
                 }
 
+                // Add title and link in markdown format
+                parts.push(format!("[{}]({})", self.title, self.link));
+
+                // Add time if available
                 if !time_ago.is_empty() {
                     parts.push(format!("- {}", time_ago));
                 }
@@ -135,12 +143,14 @@ mod tests {
         let notifier = Notifier::Log();
         let result = video.notification_text(&notifier);
 
-        // Should start with markdown link format
-        assert!(result.starts_with("- [Test Video Title](https://www.youtube.com/watch?v=test123)"));
-        // Should contain channel handle
-        assert!(result.contains("@TestChannel"));
+        // Should start with "- @TestChannel"
+        assert!(result.starts_with("- @TestChannel"));
+        // Should contain markdown link format
+        assert!(result.contains("[Test Video Title](https://www.youtube.com/watch?v=test123)"));
         // Should not contain "New video -"
         assert!(!result.contains("New video -"));
+        // Should follow the format: "- <channel_handle> [title](url) - X hours ago"
+        assert!(result.contains("@TestChannel [Test Video Title](https://www.youtube.com/watch?v=test123)"));
     }
 
     #[test]
