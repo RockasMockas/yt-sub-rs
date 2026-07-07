@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use eyre::Result;
+use log::warn;
 use xmltojson::to_json;
 
 use crate::notifier::Notifier;
@@ -17,7 +18,9 @@ impl Video {
     pub fn parse_rss(rss_data: String, channel_handle: Option<String>) -> Result<Vec<Video>> {
         let mut videos = vec![];
         let json = to_json(&rss_data).expect("Failed to convert XML to JSON");
-        let channel = json["feed"]["author"]["name"].as_str().unwrap();
+        let channel = json["feed"]["author"]["name"]
+            .as_str()
+            .ok_or_else(|| eyre::eyre!("RSS feed missing author name"))?;
 
         // Handle case where channel has no videos (no "entry" field)
         let videos_data = match json["feed"]["entry"].as_array() {
@@ -26,24 +29,42 @@ impl Video {
         };
 
         for video_data in videos_data {
-            let title = video_data["title"].as_str().unwrap();
-            let published_at = video_data["published"].as_str().unwrap();
-            let published_at: DateTime<Utc> =
-                published_at.parse().expect("Failed to parse DateTime");
-            let link = video_data["link"]["@href"].as_str().unwrap();
-
-            let video = Video {
-                channel: channel.to_string(),
-                channel_handle: channel_handle.clone(),
-                title: title.to_string(),
-                link: link.to_string(),
-                published_at,
-            };
-
-            videos.push(video);
+            match Self::parse_single_video(video_data, channel, channel_handle.as_deref()) {
+                Ok(video) => videos.push(video),
+                Err(e) => {
+                    warn!("Skipping malformed video entry: {e}");
+                }
+            }
         }
 
         Ok(videos)
+    }
+
+    fn parse_single_video(
+        video_data: &serde_json::Value,
+        channel: &str,
+        channel_handle: Option<&str>,
+    ) -> Result<Video> {
+        let title = video_data["title"]
+            .as_str()
+            .ok_or_else(|| eyre::eyre!("Missing video title"))?;
+        let published_at = video_data["published"]
+            .as_str()
+            .ok_or_else(|| eyre::eyre!("Missing published date"))?;
+        let published_at: DateTime<Utc> = published_at
+            .parse()
+            .map_err(|e| eyre::eyre!("Invalid date format: {e}"))?;
+        let link = video_data["link"]["@href"]
+            .as_str()
+            .ok_or_else(|| eyre::eyre!("Missing video link"))?;
+
+        Ok(Video {
+            channel: channel.to_string(),
+            channel_handle: channel_handle.map(String::from),
+            title: title.to_string(),
+            link: link.to_string(),
+            published_at,
+        })
     }
 
     pub fn notification_text(&self, notifier: &Notifier) -> String {
