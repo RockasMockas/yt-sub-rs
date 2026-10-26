@@ -4,6 +4,7 @@ use eyre::Result;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use yt_sub::cache;
 use yt_sub::user_settings_cli::UserSettingsCLI;
 use yt_sub_core::{logger::Logger, notifier::Notifier, UserSettings};
 
@@ -20,7 +21,11 @@ pub struct RunArgs {
     #[arg(long, help = "Fresh videos hours offset")]
     hours_offset: Option<u16>,
 
-    #[arg(long, conflicts_with = "output_append", help = "Write output to file (overwrites existing file)")]
+    #[arg(
+        long,
+        conflicts_with = "output_append",
+        help = "Write output to file (overwrites existing file)"
+    )]
     output: Option<PathBuf>,
 
     #[arg(long, conflicts_with = "output", help = "Append output to file")]
@@ -41,24 +46,47 @@ impl RunArgs {
 
         let settings = UserSettings::read(config.as_ref())?;
 
-        let last_run_at = if let Some(hours_offset) = hours_offset {
-            Utc::now() - chrono::Duration::hours(hours_offset as i64)
-        } else {
-            settings.last_run_at()
-        };
+        // Load the persistent seen-videos cache (empty if missing/corrupt).
+        let mut cache = cache::load();
 
-        let mut new_videos = vec![];
-
+        // Fetch the full RSS feed for every channel; a failed fetch
+        // contributes nothing and leaves the cache intact.
+        let mut fetched = vec![];
         for channel in &settings.channels {
-            match channel.get_fresh_videos(last_run_at).await {
-                Ok(videos) => {
-                    new_videos.extend(videos);
-                }
+            match channel.fetch_videos().await {
+                Ok(videos) => fetched.extend(videos),
                 Err(e) => {
                     logger.error(&format!("Error: {e}"));
                 }
             }
         }
+
+        // Merge newly-seen videos into the cache and persist only if changed,
+        // so fetch-failure runs leave the cache file byte-identical.
+        let cache_merge = cache::merge(&mut cache, fetched, Utc::now());
+        if !cache_merge.is_empty() {
+            cache::save(&cache)?;
+        }
+
+        // Derive the output/notifier set.
+        let mut new_videos = if let Some(hours_offset) = hours_offset {
+            // Cache-sourced window: survives current-run fetch failures.
+            cache::window(&cache, hours_offset)
+                .into_iter()
+                .map(|e| e.video)
+                .collect::<Vec<_>>()
+        } else {
+            // Notify anything published since the last run, sourced from the
+            // whole cache so a video cached-but-not-yet-notified (e.g. by a
+            // prior hours_offset run) is never silently dropped. last_run_at
+            // advances on every notifying run, so this never re-floods.
+            let last_run_at = settings.last_run_at();
+            cache
+                .iter()
+                .filter(|e| e.video.published_at > last_run_at)
+                .map(|e| e.video.clone())
+                .collect::<Vec<_>>()
+        };
 
         if new_videos.is_empty() {
             logger.info("No new videos found.");
@@ -105,11 +133,7 @@ impl RunArgs {
     }
 }
 
-fn write_output_to_file(
-    path: &std::path::Path,
-    lines: &[String],
-    append: bool,
-) -> Result<()> {
+fn write_output_to_file(path: &std::path::Path, lines: &[String], append: bool) -> Result<()> {
     if lines.is_empty() {
         return Ok(());
     }
@@ -123,7 +147,11 @@ fn write_output_to_file(
     let mut file = if append {
         OpenOptions::new().append(true).create(true).open(path)?
     } else {
-        OpenOptions::new().write(true).create(true).truncate(true).open(path)?
+        OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?
     };
 
     file.write_all(lines.join("\n").as_bytes())?;

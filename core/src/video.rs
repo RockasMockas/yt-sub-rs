@@ -1,11 +1,12 @@
 use chrono::{DateTime, Utc};
 use eyre::Result;
 use log::warn;
+use serde::{Deserialize, Serialize};
 use xmltojson::to_json;
 
 use crate::notifier::Notifier;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Video {
     pub channel: String,
     pub channel_handle: Option<String>,
@@ -149,8 +150,30 @@ mod tests {
     }
 
     #[test]
-    fn test_notification_text_format() {
+    fn test_video_serde_round_trip() {
         use chrono::DateTime;
+
+        let video = Video {
+            channel: "Test Channel".to_string(),
+            channel_handle: Some("@TestChannel".to_string()),
+            title: "Test Video Title".to_string(),
+            link: "https://www.youtube.com/watch?v=serde1".to_string(),
+            published_at: DateTime::parse_from_rfc3339("2024-01-01T12:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        };
+
+        let json = serde_json::to_string(&video).unwrap();
+        let back: Video = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(back.link, video.link);
+        assert_eq!(back.title, video.title);
+        assert_eq!(back.channel_handle, video.channel_handle);
+        assert_eq!(back.published_at, video.published_at);
+    }
+
+    #[test]
+    fn test_notification_text_format() {
         use crate::notifier::Notifier;
 
         let video = Video {
@@ -158,7 +181,9 @@ mod tests {
             channel_handle: Some("@TestChannel".to_string()),
             title: "Test Video Title".to_string(),
             link: "https://www.youtube.com/watch?v=test123".to_string(),
-            published_at: DateTime::parse_from_rfc3339("2024-01-01T12:00:00Z").unwrap().with_timezone(&chrono::Utc),
+            published_at: DateTime::parse_from_rfc3339("2024-01-01T12:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
         };
 
         let notifier = Notifier::Log();
@@ -171,7 +196,8 @@ mod tests {
         // Should not contain "New video -"
         assert!(!result.contains("New video -"));
         // Should follow the format: "- <channel_handle> [title](url) - X hours ago"
-        assert!(result.contains("@TestChannel [Test Video Title](https://www.youtube.com/watch?v=test123)"));
+        assert!(result
+            .contains("@TestChannel [Test Video Title](https://www.youtube.com/watch?v=test123)"));
     }
 
     #[test]
@@ -184,21 +210,27 @@ mod tests {
                 channel_handle: Some("@ChannelA".to_string()),
                 title: "Older Video".to_string(),
                 link: "https://www.youtube.com/watch?v=old".to_string(),
-                published_at: DateTime::parse_from_rfc3339("2024-01-01T10:00:00Z").unwrap().with_timezone(&chrono::Utc),
+                published_at: DateTime::parse_from_rfc3339("2024-01-01T10:00:00Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
             },
             Video {
                 channel: "Channel B".to_string(),
                 channel_handle: Some("@ChannelB".to_string()),
                 title: "Newer Video".to_string(),
                 link: "https://www.youtube.com/watch?v=new".to_string(),
-                published_at: DateTime::parse_from_rfc3339("2024-01-01T14:00:00Z").unwrap().with_timezone(&chrono::Utc),
+                published_at: DateTime::parse_from_rfc3339("2024-01-01T14:00:00Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
             },
             Video {
                 channel: "Channel C".to_string(),
                 channel_handle: Some("@ChannelC".to_string()),
                 title: "Newest Video".to_string(),
                 link: "https://www.youtube.com/watch?v=newest".to_string(),
-                published_at: DateTime::parse_from_rfc3339("2024-01-01T16:00:00Z").unwrap().with_timezone(&chrono::Utc),
+                published_at: DateTime::parse_from_rfc3339("2024-01-01T16:00:00Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
             },
         ];
 

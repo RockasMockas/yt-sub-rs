@@ -25,7 +25,10 @@ impl ChannelDataArgs {
             let path = rest.split('?').next().unwrap_or(rest).trim_end_matches('/');
             if path.starts_with('@') {
                 path.to_string()
-            } else if let Some(name) = path.strip_prefix("c/").or_else(|| path.strip_prefix("channel/")) {
+            } else if let Some(name) = path
+                .strip_prefix("c/")
+                .or_else(|| path.strip_prefix("channel/"))
+            {
                 format!("@{name}")
             } else {
                 format!("@{path}")

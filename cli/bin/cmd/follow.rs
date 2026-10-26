@@ -82,7 +82,9 @@ impl FollowArgs {
         } else if let Some(h) = handle {
             parse_handle(&h)
         } else {
-            eyre::bail!("Provide a channel handle (@handle), YouTube URL, or --channel-id + --desc");
+            eyre::bail!(
+                "Provide a channel handle (@handle), YouTube URL, or --channel-id + --desc"
+            );
         };
 
         if (channel_id.is_none() && desc.is_some()) || (channel_id.is_some() && desc.is_none()) {

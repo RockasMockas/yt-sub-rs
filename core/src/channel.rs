@@ -153,9 +153,12 @@ impl Channel {
             .filter(|id| id.starts_with("UC"))
             .ok_or_else(|| eyre!("Could not find a channel_id in the YouTube page"))?;
 
-        let channel_name = Self::extract_between(&html, "<meta property=\"og:title\" content=\"", "\"")
-            .or_else(|| Self::extract_between(&html, "\"channelMetadataRenderer\":{\"title\":\"", "\""))
-            .unwrap_or_else(|| handle.to_string());
+        let channel_name =
+            Self::extract_between(&html, "<meta property=\"og:title\" content=\"", "\"")
+                .or_else(|| {
+                    Self::extract_between(&html, "\"channelMetadataRenderer\":{\"title\":\"", "\"")
+                })
+                .unwrap_or_else(|| handle.to_string());
 
         Ok((channel_id.to_string(), channel_name))
     }
@@ -176,6 +179,12 @@ impl Channel {
             .collect();
 
         Ok(videos)
+    }
+
+    /// Fetch the full parsed RSS feed for this channel, unfiltered by date.
+    pub async fn fetch_videos(&self) -> Result<Vec<Video>> {
+        let rss = self.get_rss_data().await?;
+        Video::parse_rss(rss, Some(self.handle.clone()))
     }
 
     async fn get_rss_data(&self) -> Result<String> {
