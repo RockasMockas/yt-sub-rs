@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use eyre::Result;
-use log::warn;
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use xmltojson::to_json;
 
@@ -31,7 +31,15 @@ impl Video {
 
         for video_data in videos_data {
             match Self::parse_single_video(video_data, channel, channel_handle.as_deref()) {
-                Ok(video) => videos.push(video),
+                Ok(video) => {
+                    // Shorts are dropped at the source so they never reach the
+                    // cache, the outputs, or the notifiers.
+                    if video.is_short() {
+                        debug!("Skipping YouTube Short: {}", video.link);
+                    } else {
+                        videos.push(video);
+                    }
+                }
                 Err(e) => {
                     warn!("Skipping malformed video entry: {e}");
                 }
@@ -66,6 +74,11 @@ impl Video {
             link: link.to_string(),
             published_at,
         })
+    }
+
+    /// Whether this video points at a YouTube Short.
+    pub fn is_short(&self) -> bool {
+        is_short_link(&self.link)
     }
 
     pub fn notification_text(&self, notifier: &Notifier) -> String {
@@ -130,6 +143,26 @@ impl Video {
     }
 }
 
+/// Shorts are served from their own path segment
+/// (`https://www.youtube.com/shorts/<video_id>`, on any host, optionally with a
+/// query string), while regular videos use `watch`, `live`, `embed`, etc.
+pub fn is_short_link(link: &str) -> bool {
+    let after_authority = link.split_once("://").map_or(link, |(_, rest)| rest);
+    let path = after_authority
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(after_authority);
+
+    let mut segments = path.split('/').filter(|s| !s.is_empty());
+    // A scheme-less link still starts with its host, which isn't a path segment.
+    let first_segment = match segments.next() {
+        Some(host) if host.contains('.') => segments.next(),
+        other => other,
+    };
+
+    first_segment.is_some_and(|segment| segment.eq_ignore_ascii_case("shorts"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +180,86 @@ mod tests {
         let rss_data = fs::read_to_string("src/fixtures/empty_channel.xml").unwrap();
         let videos = Video::parse_rss(rss_data, Some("@EmptyChannel".to_string())).unwrap();
         assert_eq!(videos.len(), 0);
+    }
+
+    /// Minimal Atom feed with one regular video and two Shorts. Needs 2+ entries,
+    /// because xmltojson collapses a lone `<entry>` into an object instead of an
+    /// array.
+    const SHORTS_FEED: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+ <author><name>Shorts Channel</name></author>
+ <entry>
+  <title>A regular video</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=regular000001"/>
+  <published>2024-08-22T16:08:11+00:00</published>
+ </entry>
+ <entry>
+  <title>A short</title>
+  <link rel="alternate" href="https://www.youtube.com/shorts/short00000001"/>
+  <published>2024-08-22T15:08:11+00:00</published>
+ </entry>
+ <entry>
+  <title>A mobile short with a query string</title>
+  <link rel="alternate" href="https://m.youtube.com/shorts/short00000002?feature=share"/>
+  <published>2024-08-22T14:08:11+00:00</published>
+ </entry>
+</feed>"#;
+
+    #[tokio::test]
+    async fn parse_rss_filters_out_shorts() {
+        let videos =
+            Video::parse_rss(SHORTS_FEED.to_string(), Some("@ShortsChannel".to_string())).unwrap();
+
+        assert_eq!(videos.len(), 1);
+        assert_eq!(
+            videos[0].link,
+            "https://www.youtube.com/watch?v=regular000001"
+        );
+    }
+
+    #[test]
+    fn test_is_short_link() {
+        let shorts = [
+            "https://www.youtube.com/shorts/abc123",
+            "https://youtube.com/shorts/abc123",
+            "http://m.youtube.com/shorts/abc123?feature=share",
+            "https://www.youtube.com/shorts/abc123?si=x1",
+            "https://www.youtube.com/shorts/abc123#t=1",
+            "https://www.youtube.com/Shorts/abc123",
+            "youtube.com/shorts/abc123",
+        ];
+        for link in shorts {
+            assert!(is_short_link(link), "expected short: {link}");
+        }
+
+        let not_shorts = [
+            "https://www.youtube.com/watch?v=abc123",
+            "https://www.youtube.com/watch?v=abc123&t=1",
+            "https://m.youtube.com/watch?v=abc123",
+            "https://www.youtube.com/live/abc123",
+            "https://www.youtube.com/embed/abc123",
+            "https://www.youtube.com/playlist?list=abc123",
+            "https://www.youtube.com/@SomeChannel",
+            "https://www.youtube.com/channel/UCabc123",
+            "https://www.youtube.com/feed/subscriptions",
+        ];
+        for link in not_shorts {
+            assert!(!is_short_link(link), "unexpected short: {link}");
+        }
+    }
+
+    #[test]
+    fn test_video_is_short() {
+        assert!(Video {
+            channel: "Test Channel".to_string(),
+            channel_handle: None,
+            title: "Short".to_string(),
+            link: "https://www.youtube.com/shorts/abc123".to_string(),
+            published_at: DateTime::parse_from_rfc3339("2024-01-01T12:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        }
+        .is_short());
     }
 
     #[test]

@@ -55,9 +55,14 @@ pub fn cache_path() -> PathBuf {
 }
 
 /// Load the cache from `path`. Returns empty on missing or corrupt file.
+/// Shorts cached by older versions are dropped, so they never resurface.
 pub fn load_from(path: &Path) -> Vec<CacheEntry> {
     match fs::read_to_string(path) {
-        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+        Ok(data) => serde_json::from_str::<Vec<CacheEntry>>(&data)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| !e.video.is_short())
+            .collect(),
         Err(_) => vec![],
     }
 }
@@ -68,7 +73,8 @@ pub fn load() -> Vec<CacheEntry> {
 }
 
 /// Merge `fetched` videos into `cache`, deduplicating by video link.
-/// Returns only the newly-added entries (pushed with `seen_at = now`).
+/// Shorts are ignored. Returns only the newly-added entries (pushed with
+/// `seen_at = now`).
 pub fn merge(
     cache: &mut Vec<CacheEntry>,
     fetched: Vec<Video>,
@@ -78,6 +84,9 @@ pub fn merge(
     let mut newly_seen = vec![];
 
     for video in fetched {
+        if video.is_short() {
+            continue;
+        }
         if seen.insert(video.link.clone()) {
             let entry = CacheEntry {
                 video,
@@ -343,5 +352,58 @@ mod tests {
         let win = window(&cache, 2);
         assert_eq!(win.len(), 1);
         assert_eq!(win[0].video.link, "recent");
+    }
+
+    #[test]
+    fn merge_ignores_shorts() {
+        let now = Utc::now();
+        let mut cache: Vec<CacheEntry> = vec![];
+
+        let newly = merge(
+            &mut cache,
+            vec![
+                video(
+                    "https://www.youtube.com/watch?v=regular000001",
+                    "2024-01-01T10:00:00Z",
+                ),
+                video(
+                    "https://www.youtube.com/shorts/short00000001",
+                    "2024-01-01T11:00:00Z",
+                ),
+            ],
+            now,
+        );
+
+        assert_eq!(newly.len(), 1);
+        assert_eq!(cache.len(), 1);
+        assert!(cache[0].video.link.contains("watch?v="));
+    }
+
+    #[test]
+    fn load_drops_shorts_cached_by_older_versions() {
+        let path = temp_path("shorts").with_extension("json");
+        let now = Utc::now();
+        let cache = vec![
+            CacheEntry {
+                video: video(
+                    "https://www.youtube.com/watch?v=regular000001",
+                    "2024-01-01T10:00:00Z",
+                ),
+                seen_at: now,
+            },
+            CacheEntry {
+                video: video(
+                    "https://www.youtube.com/shorts/short00000001",
+                    "2024-01-01T11:00:00Z",
+                ),
+                seen_at: now,
+            },
+        ];
+        save_to(&path, &cache).unwrap();
+
+        let loaded = load_from(&path);
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded[0].video.link.contains("watch?v="));
+        let _ = fs::remove_file(&path);
     }
 }
